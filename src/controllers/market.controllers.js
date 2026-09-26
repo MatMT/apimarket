@@ -1,107 +1,156 @@
-import { pool } from '../db.js'
+import bcrypt from 'bcryptjs';
+import { pool } from '../config.js';
 
-export const getUsuarios=async(req,res)=>{
-    try{
-        const [result]=await pool.query('SELECT * FROM usuarios')
-        res.json(result)
-    }catch(error){
-        return res.status(500).json({ message: "Algo salio mal" });
-    }
+export const getUsuarios = async (req, res) => {
+  try {
+    const [result] = await pool.query('SELECT id, nombre, correo FROM usuarios');
+    res.json(result);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Algo salio mal' });
+  }
 };
 
+export const postRegistro = async (req, res) => {
+  try {
+    const { nombre, correo, clave } = req.body;
 
-export const getUsuario = async (req, res) => {
-    try {
-      const { username, password } = req.body; 
-      const [rows] = await pool.query("SELECT * FROM usuarios WHERE nombre = ? AND clave = ?", [
-        username, password
-      ]);
-      if (rows.length <= 0) {
-        return res.status(404).json({ message: "Usuario no Encontrado" });
-      }
-      res.json({ message: "Encontrado" });
-    } catch (error) {
-      return res.status(500).json({ message: 'Algo salio mal'});
+    const [existe] = await pool.query(
+      'SELECT id FROM usuarios WHERE correo = ?',
+      [correo]
+    );
+    if (existe.length > 0) {
+      return res.status(409).json({ message: 'El correo ya está registrado' });
     }
-  };
-  
-  export const getProductos=async(req,res)=>{
-    try{
-      const [rows] = await pool.query("SELECT * FROM productos");
-      if (rows.length <= 0) {
-        return res.status(404).json({ message: "No hay productos registrados" });
-      }
-      res.json({ productos: rows });
-    }catch(error){
-        return res.status(500).json({ message: "Algo salio mal" });
-    }
-  };
 
-  export const getProductosId=async(req,res)=>{
-    try{
-      const { id } = req.params; // Obtener el ID del producto desde los parámetros de la URL
-      const [rows] = await pool.query("SELECT * FROM productos where id=?",[id]);
-      if (rows.length <= 0) {
-        return res.status(404).json({ message: "No hay productos registrados" });
-      }
-      res.json({ productos: rows });
-    }catch(error){
-        return res.status(500).json({ message: "Algo salio mal" });
-    }
-  };
+    const claveHasheada = await bcrypt.hash(clave, 10);
+    const [result] = await pool.query(
+      'INSERT INTO usuarios (nombre, correo, clave) VALUES (?, ?, ?)',
+      [nombre, correo, claveHasheada]
+    );
 
+    res.status(201).json({ message: 'Usuario registrado correctamente', id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Algo salió mal' });
+  }
+};
 
-  export const postProductos=async(req,res)=>{
-    try {
-      const { name, description, price_cost, price_sale,quantity,image } = req.body; 
-      const [rows] = await pool.query("INSERT INTO productos (nombre,descripcion,precio_costo,precio_venta,cantidad,fotografia) VALUES (?,?,?,?,?,?)", [
-        name, description, price_cost, price_sale,quantity,image
-      ]);
-      if (rows.length <= 0) {
-        return res.status(404).json({ message: "No se ingreso el producto" });
-      }
-      res.json({ message: "Producto Agregado" });
-    } catch (error) {
-      return res.status(500).json({ message: 'Algo salio mal'});
-    }
-  };
+export const postLogin = async (req, res) => {
+  try {
+    const { correo, clave, username, password } = req.body;
+    const email = correo || username;
+    const pass = clave || password;
 
-  export const putProductos = async (req, res) => {
-    try {
-      const { id } = req.params; // Obtener el ID del producto desde los parámetros de la URL
-      const { name, description, price_cost, price_sale, quantity, image } = req.body;
-  
-      // Actualizar el producto en la base de datos
-      const [result] = await pool.query(
-        "UPDATE productos SET nombre = ?, descripcion = ?, precio_costo = ?, precio_venta = ?, cantidad = ?, fotografia = ? WHERE id = ?",
-        [name, description, price_cost, price_sale, quantity, image, id]
-      );
-  
-      // Verificar si se actualizó algún registro
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: "Producto no encontrado" });
-      }
-      res.json({ message: "Producto actualizado" });
-    } catch (error) {
-      return res.status(500).json({ message: 'Algo salió mal' });
-    }
-  };
-  
+    const [rows] = await pool.query('SELECT * FROM usuarios WHERE correo = ? OR nombre = ?', [email, email]);
 
-  export const deleteProductos = async (req, res) => {
-    try {
-      const { id } = req.params; // Obtener el ID del producto desde los parámetros de la URL
-  
-      // Eliminar el producto de la base de datos
-      const [result] = await pool.query("DELETE FROM productos WHERE id = ?", [id]);
-  
-      // Verificar si se eliminó algún registro
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: "Producto no encontrado" });
-      }
-      res.json({ message: "Producto eliminado" });
-    } catch (error) {
-      return res.status(500).json({ message: 'Algo salió mal' });
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Usuario no encontrado' });
     }
-  };
-  
+
+    let coincide = false;
+    // Soporta contraseña en texto plano o hasheada con bcrypt
+    if (rows[0].clave.startsWith('$2a$') || rows[0].clave.startsWith('$2b$')) {
+      coincide = await bcrypt.compare(pass, rows[0].clave);
+    } else {
+      coincide = (pass === rows[0].clave);
+    }
+
+    if (!coincide) {
+      return res.status(401).json({ message: 'Credenciales inválidas' });
+    }
+
+    res.json({
+      message: 'Encontrado',
+      usuario: { id: rows[0].id, nombre: rows[0].nombre, correo: rows[0].correo },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Algo salió mal' });
+  }
+};
+
+export const getProductos = async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM productos');
+    res.json(rows);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Algo salio mal' });
+  }
+};
+
+export const getProductosId = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [rows] = await pool.query('SELECT * FROM productos WHERE id = ?', [id]);
+    if (rows.length <= 0) {
+      return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    res.json(rows[0]);
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Algo salio mal' });
+  }
+};
+
+export const postProductos = async (req, res) => {
+  try {
+    const nombre = req.body.nombre ?? req.body.name;
+    const descripcion = req.body.descripcion ?? req.body.description;
+    const precio_costo = req.body.precio_costo ?? req.body.price_cost;
+    const precio_venta = req.body.precio_venta ?? req.body.price_sale;
+    const cantidad = req.body.cantidad ?? req.body.quantity;
+    const fotografia = req.body.fotografia ?? req.body.image;
+
+    const [result] = await pool.query(
+      'INSERT INTO productos (nombre, descripcion, precio_costo, precio_venta, cantidad, fotografia) VALUES (?, ?, ?, ?, ?, ?)',
+      [nombre, descripcion, precio_costo, precio_venta, cantidad, fotografia]
+    );
+
+    res.status(201).json({ message: 'Producto Agregado', id: result.insertId });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Algo salio mal' });
+  }
+};
+
+export const putProductos = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const nombre = req.body.nombre ?? req.body.name;
+    const descripcion = req.body.descripcion ?? req.body.description;
+    const precio_costo = req.body.precio_costo ?? req.body.price_cost;
+    const precio_venta = req.body.precio_venta ?? req.body.price_sale;
+    const cantidad = req.body.cantidad ?? req.body.quantity;
+    const fotografia = req.body.fotografia ?? req.body.image;
+
+    const [result] = await pool.query(
+      'UPDATE productos SET nombre = ?, descripcion = ?, precio_costo = ?, precio_venta = ?, cantidad = ?, fotografia = ? WHERE id = ?',
+      [nombre, descripcion, precio_costo, precio_venta, cantidad, fotografia, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    res.json({ message: 'Producto actualizado' });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Algo salió mal' });
+  }
+};
+
+export const deleteProductos = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const [result] = await pool.query('DELETE FROM productos WHERE id = ?', [id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    res.json({ message: 'Producto eliminado' });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: 'Algo salió mal' });
+  }
+};
